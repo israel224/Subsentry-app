@@ -5,7 +5,7 @@ import requests
 import random
 
 # --- CONFIGURATION ---
-B BREVO_API_KEY = st.secrets["BREVO_API_KEY"]
+BREVO_API_KEY = st.secrets["BREVO_API_KEY"]
 SENDER_EMAIL = "ekeledilichukwuisrael@gmail.com"
 
 # --- FUNCTIONS ---
