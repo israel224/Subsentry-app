@@ -1,63 +1,64 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
-import smtplib
-from email.message import EmailMessage
+import requests
+import random
 
-st.set_page_config(page_title="SubSentry AI", page_icon="🛡️")
+# --- CONFIGURATION ---
+B BREVO_API_KEY = st.secrets["BREVO_API_KEY"]
+SENDER_EMAIL = "ekeledilichukwuisrael@gmail.com"
 
-# --- EMAIL FUNCTION ---
-def send_sentry_alert(service_name, user_email):
-    # This is the "Post Office" part of the code
-    msg = EmailMessage()
-    msg.set_content(f"🛡️ SubSentry Alert: Your {service_name} subscription expires in 2 days! Check your bank to avoid automatic debit.")
-    msg['Subject'] = f"Action Required: {service_name} Renewal"
-    msg['To'] = user_email
-    msg['From'] = "subsentry.alerts@gmail.com" # We will configure this next
+# --- FUNCTIONS ---
+def send_email(target_email, subject, body):
+    url = "https://api.brevo.com/v3/smtp/email"
+    headers = {"api-key": BREVO_API_KEY, "content-type": "application/json"}
+    payload = {
+        "sender": {"name": "SubSentry", "email": SENDER_EMAIL},
+        "to": [{"email": target_email}],
+        "subject": subject,
+        "htmlContent": f"<html><body>{body}</body></html>"
+    }
+    requests.post(url, json=payload, headers=headers)
 
-    # Note: Real sending requires your Google App Password (Step 2)
-    st.info(f"📧 Simulated Email Sent to {user_email}: 'Cancel {service_name}?'")
+# --- SESSION STATE (The App's Memory) ---
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+if 'otp' not in st.session_state:
+    st.session_state.otp = None
 
-if 'sub_data' not in st.session_state:
-    st.session_state.sub_data = []
-
-st.sidebar.title("🛡️ SubSentry Control")
-user_email = st.sidebar.text_input("Your Alert Email", "example@gmail.com")
-page = st.sidebar.radio("Navigate", ["Dashboard", "Add New Subscription"])
-
-# --- DASHBOARD ---
-if page == "Dashboard":
-    st.title("📊 Subscription Command Center")
+# --- PHASE 1: LOGIN SYSTEM ---
+if not st.session_state.authenticated:
+    st.header("🔒 Secure Login")
+    user_email = st.text_input("Enter your email to receive a code")
     
-    if not st.session_state.sub_data:
-        st.info("No active sentries.")
-    else:
-        df = pd.DataFrame(st.session_state.sub_data)
-        today = datetime.now().date()
-        
-        for index, row in df.iterrows():
-            expiry = datetime.strptime(row['Expiry Date'], "%Y-%m-%d").date()
-            days_until = (expiry - today).days
-            
-            if days_until == 2:
-                st.error(f"🚨 ALERT: {row['Service']} expires in 2 days!")
-                if st.button(f"Send Alert Email for {row['Service']}"):
-                    send_sentry_alert(row['Service'], user_email)
-            
-        st.divider()
-        st.dataframe(df, use_container_width=True)
+    if st.button("Send Verification Code"):
+        st.session_state.otp = str(random.randint(100000, 999999))
+        send_email(user_email, "Your SubSentry Code", f"Your login code is: <b>{st.session_state.otp}</b>")
+        st.info("Code sent! Check your inbox.")
 
-# --- ADD NEW ---
-elif page == "Add New Subscription":
-    st.title("➕ Deploy New Sentry")
-    with st.form("entry_form"):
-        name = st.text_input("Service Name")
-        cost = st.number_input("Monthly Cost (₦)", min_value=0.0)
-        pay_date = st.date_input("Payment Date")
-        expiry_date = pay_date + timedelta(days=30)
-        
-        if st.form_submit_button("Start Guarding"):
-            st.session_state.sub_data.append({
-                "Service": name, "Cost": cost, "Expiry Date": str(expiry_date)
-            })
-            st.success(f"Tracking {name}. Expiry: {expiry_date}")
+    code_input = st.text_input("Enter the 6-digit code")
+    if st.button("Verify & Enter"):
+        if code_input == st.session_state.otp:
+            st.session_state.authenticated = True
+            st.rerun()
+        else:
+            st.error("Invalid code.")
+    st.stop()
+
+# --- PHASE 2: THE DASHBOARD (Only shows if logged in) ---
+st.title("🛡️ Subscription Command Center")
+menu = st.sidebar.radio("Menu", ["My Dashboard", "Add Subscription"])
+
+if menu == "Add Subscription":
+    name = st.text_input("App Name (e.g. Netflix)")
+    date = st.date_input("Next Expiry Date")
+    if st.button("Save Subscription"):
+        # This is where the 2-day logic lives
+        st.success(f"Sentry set for {name}!")
+        # Automated check
+        if date - timedelta(days=2) == datetime.now().date():
+             send_email(user_email, "⚠️ 2-Day Warning", f"Your {name} sub expires in 2 days!")
+
+elif menu == "My Dashboard":
+    st.write("Welcome back! Your sentries are active.")
+    # You can add a table here later to show saved subs
