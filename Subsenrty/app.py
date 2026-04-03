@@ -1,10 +1,10 @@
 import streamlit as st
 import random
 import requests
+from datetime import datetime
 from supabase import create_client, Client
 
 # --- 1. DATABASE CONNECTION ---
-# This connects to the Supabase URL and Key you just put in your Secrets
 try:
     url: str = st.secrets["SUPABASE_URL"]
     key: str = st.secrets["SUPABASE_KEY"]
@@ -27,11 +27,18 @@ st.markdown("""
         border: none;
         padding: 10px;
     }
+    .card {
+        padding: 20px;
+        border-radius: 10px;
+        border: 1px solid #eee;
+        margin-bottom: 15px;
+        box-shadow: 2px 2px 5px rgba(0,0,0,0.05);
+    }
     </style>
     """, unsafe_allow_html=True)
 
 # --- 3. EMAIL FUNCTION (BREVO) ---
-def send_otp(email, code):
+def send_email(email, subject, content):
     headers = {
         "api-key": st.secrets["BREVO_API_KEY"],
         "content-type": "application/json"
@@ -39,18 +46,13 @@ def send_otp(email, code):
     payload = {
         "sender": {"name": "SubSentry", "email": "ekeledilichukwuisrael@gmail.com"},
         "to": [{"email": email}],
-        "subject": "Your SubSentry Verification Code",
-        "htmlContent": f"""
-            <h3>Welcome to SubSentry</h3>
-            <p>Your verification code is: <b style='font-size: 20px; color: #007BFF;'>{code}</b></p>
-            <p>If you didn't request this, please ignore this email.</p>
-        """
+        "subject": subject,
+        "htmlContent": content
     }
     try:
-        response = requests.post("https://api.brevo.com/v3/smtp/email", json=payload, headers=headers)
-        return response.status_code == 201
+        requests.post("https://api.brevo.com/v3/smtp/email", json=payload, headers=headers)
     except:
-        return False
+        pass
 
 # --- 4. APP LOGIC ---
 if 'flow' not in st.session_state:
@@ -59,7 +61,7 @@ if 'flow' not in st.session_state:
 # PAGE: LANDING
 if st.session_state.flow == "landing":
     st.title("🔔 SUBSENTRY ALERT")
-    st.write("Never miss a subscription renewal again.")
+    st.write("Manage your subscriptions and get alerted before you get debited.")
     if st.button("CREATE ACCOUNT"):
         st.session_state.flow = "signup"
         st.rerun()
@@ -67,72 +69,96 @@ if st.session_state.flow == "landing":
         st.session_state.flow = "login"
         st.rerun()
 
-# PAGE: SIGNUP (EMAIL INPUT)
+# PAGE: SIGNUP
 elif st.session_state.flow == "signup":
-    st.subheader("Create your account")
-    email_in = st.text_input("Enter your email address")
-    if st.button("SEND VERIFICATION CODE"):
+    st.subheader("Create Account")
+    email_in = st.text_input("Email Address")
+    if st.button("SEND OTP"):
         if "@" in email_in:
             st.session_state.temp_email = email_in
             st.session_state.otp = str(random.randint(1000, 9999))
-            if send_otp(email_in, st.session_state.otp):
-                st.session_state.flow = "verify"
-                st.success("Code sent! Check your inbox.")
-                st.rerun()
-            else:
-                st.error("Failed to send email. Check your Brevo API key.")
-        else:
-            st.error("Please enter a valid email.")
+            otp_html = f"<h3>Your SubSentry Code is: {st.session_state.otp}</h3>"
+            send_email(email_in, "Verification Code", otp_html)
+            st.session_state.flow = "verify"
+            st.rerun()
 
-# PAGE: VERIFY OTP
+# PAGE: VERIFY
 elif st.session_state.flow == "verify":
-    st.subheader("Verify your email")
+    st.subheader("Verify OTP")
     code_in = st.text_input("Enter 4-digit code")
     if st.button("VERIFY"):
         if code_in == st.session_state.otp:
             st.session_state.flow = "set_pass"
             st.rerun()
         else:
-            st.error("Invalid code. Please try again.")
+            st.error("Wrong code!")
 
-# PAGE: SET PASSWORD & SAVE TO SUPABASE
+# PAGE: SET PASSWORD
 elif st.session_state.flow == "set_pass":
-    st.subheader("Secure your account")
-    p1 = st.text_input("Create a password", type="password")
-    if st.button("COMPLETE SIGNUP"):
-        if len(p1) > 5:
-            # This part sends the data to your Supabase table
-            user_data = {"email": st.session_state.temp_email, "password": p1}
-            try:
-                supabase.table("users").insert(user_data).execute()
-                st.success("Account created successfully!")
-                st.session_state.flow = "dashboard"
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error saving to database: {e}")
-        else:
-            st.error("Password must be at least 6 characters.")
+    st.subheader("Set Password")
+    p1 = st.text_input("Password", type="password")
+    if st.button("FINISH"):
+        supabase.table("users").insert({"email": st.session_state.temp_email, "password": p1}).execute()
+        st.success("Account Ready!")
+        st.session_state.flow = "dashboard"
+        st.rerun()
 
 # PAGE: LOGIN
 elif st.session_state.flow == "login":
-    st.subheader("Welcome back")
+    st.subheader("Login")
     l_email = st.text_input("Email")
     l_pass = st.text_input("Password", type="password")
-    if st.button("LOG IN"):
-        # This checks the Supabase table for the user
-        res = supabase.table("users").select("*").eq("email", l_email).execute()
-        if res.data and res.data[0]['password'] == l_pass:
+    if st.button("ENTER"):
+        res = supabase.table("users").select("*").eq("email", l_email).eq("password", l_pass).execute()
+        if res.data:
             st.session_state.temp_email = l_email
             st.session_state.flow = "dashboard"
             st.rerun()
         else:
-            st.error("Invalid email or password.")
+            st.error("Invalid credentials.")
 
-# PAGE: DASHBOARD
+# PAGE: DASHBOARD (THE NEW PART)
 elif st.session_state.flow == "dashboard":
-    st.title(f"🚀 Hello, {st.session_state.temp_email}")
-    st.write("Welcome to your SubSentry dashboard.")
-    st.info("Currently tracking: 0 Subscriptions")
+    st.title("🚀 Your Subscriptions")
+    st.write(f"Logged in: *{st.session_state.temp_email}*")
+
+    # ADD NEW SUB
+    with st.expander("➕ Add New Subscription"):
+        name = st.text_input("Service Name (e.g. Netflix)")
+        amt = st.number_input("Price (₦)", min_value=0.0)
+        date = st.date_input("Next Renewal Date")
+        if st.button("SAVE"):
+            sub_data = {
+                "user_email": st.session_state.temp_email,
+                "service_name": name,
+                "price": amt,
+                "renewal_date": str(date)
+            }
+            supabase.table("subscriptions").insert(sub_data).execute()
+            st.success("Subscription Saved!")
+            st.rerun()
+
+    # DISPLAY SUBS
+    res = supabase.table("subscriptions").select("*").eq("user_email", st.session_state.temp_email).execute()
+    if res.data:
+        for s in res.data:
+            # Check for 2-day warning
+            renewal = datetime.strptime(s['renewal_date'], '%Y-%m-%d').date()
+            days_left = (renewal - datetime.now().date()).days
+            
+            warning_style = "color: red; font-weight: bold;" if days_left <= 2 else "color: green;"
+            status = "⚠️ DUE SOON" if days_left <= 2 else f"{days_left} days left"
+
+            st.markdown(f"""
+                <div class="card">
+                    <h3>{s['service_name']}</h3>
+                    <p style="{warning_style}">{status}</p>
+                    <p>Price: ₦{s['price']} | Date: {s['renewal_date']}</p>
+                </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.info("No subscriptions added yet.")
+
     if st.button("LOG OUT"):
         st.session_state.flow = "landing"
         st.rerun()
