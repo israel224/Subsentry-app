@@ -1,87 +1,138 @@
 import streamlit as st
-import pandas as pd
 import random
 import requests
-from streamlit_gsheets import GSheetsConnection
+from supabase import create_client, Client
 
-# --- 1. THEME ---
+# --- 1. DATABASE CONNECTION ---
+# This connects to the Supabase URL and Key you just put in your Secrets
+try:
+    url: str = st.secrets["SUPABASE_URL"]
+    key: str = st.secrets["SUPABASE_KEY"]
+    supabase: Client = create_client(url, key)
+except Exception as e:
+    st.error("Database credentials missing in Streamlit Secrets.")
+    st.stop()
+
+# --- 2. STYLING ---
 st.set_page_config(page_title="SubSentry Alert", page_icon="🔔")
-st.markdown("<style>.stApp { background-color: white; color: black; } div.stButton > button { background-color: #007BFF; color: white; border-radius: 5px; }</style>", unsafe_allow_html=True)
+st.markdown("""
+    <style>
+    .stApp { background-color: white; color: black; }
+    div.stButton > button { 
+        background-color: #007BFF; 
+        color: white; 
+        width: 100%; 
+        border-radius: 5px; 
+        font-weight: bold; 
+        border: none;
+        padding: 10px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
-# --- 2. DATABASE ---
-conn = st.connection("gsheets", type=GSheetsConnection)
-
-def get_users():
-    try:
-        # We read the sheet data
-        return conn.read(worksheet="Sheet1", ttl=0)
-    except:
-        return pd.DataFrame(columns=["email", "password"])
-
-# --- 3. CONFIG ---
-BREVO_API_KEY = st.secrets["BREVO_API_KEY"]
-SENDER_EMAIL = "ekeledilichukwuisrael@gmail.com"
-
+# --- 3. EMAIL FUNCTION (BREVO) ---
 def send_otp(email, code):
-    url = "https://api.brevo.com/v3/smtp/email"
-    headers = {"api-key": BREVO_API_KEY, "content-type": "application/json"}
-    payload = {"sender": {"name": "SubSentry", "email": SENDER_EMAIL}, "to": [{"email": email}], "subject": "Your Code", "htmlContent": f"<b>{code}</b>"}
-    requests.post(url, json=payload, headers=headers)
+    headers = {
+        "api-key": st.secrets["BREVO_API_KEY"],
+        "content-type": "application/json"
+    }
+    payload = {
+        "sender": {"name": "SubSentry", "email": "ekeledilichukwuisrael@gmail.com"},
+        "to": [{"email": email}],
+        "subject": "Your SubSentry Verification Code",
+        "htmlContent": f"""
+            <h3>Welcome to SubSentry</h3>
+            <p>Your verification code is: <b style='font-size: 20px; color: #007BFF;'>{code}</b></p>
+            <p>If you didn't request this, please ignore this email.</p>
+        """
+    }
+    try:
+        response = requests.post("https://api.brevo.com/v3/smtp/email", json=payload, headers=headers)
+        return response.status_code == 201
+    except:
+        return False
 
-# --- 4. APP FLOW ---
-if 'flow' not in st.session_state: st.session_state.flow = "landing"
+# --- 4. APP LOGIC ---
+if 'flow' not in st.session_state:
+    st.session_state.flow = "landing"
 
+# PAGE: LANDING
 if st.session_state.flow == "landing":
     st.title("🔔 SUBSENTRY ALERT")
-    if st.button("CREATE ACCOUNT"): st.session_state.flow = "signup"; st.rerun()
-    if st.button("LOG IN"): st.session_state.flow = "login"; st.rerun()
+    st.write("Never miss a subscription renewal again.")
+    if st.button("CREATE ACCOUNT"):
+        st.session_state.flow = "signup"
+        st.rerun()
+    if st.button("LOG IN"):
+        st.session_state.flow = "login"
+        st.rerun()
 
+# PAGE: SIGNUP (EMAIL INPUT)
 elif st.session_state.flow == "signup":
-    email = st.text_input("Enter Email")
-    if st.button("SEND CODE"):
-        st.session_state.temp_email = email
-        st.session_state.otp = str(random.randint(1000, 9999))
-        send_otp(email, st.session_state.otp)
-        st.session_state.flow = "verify"; st.rerun()
+    st.subheader("Create your account")
+    email_in = st.text_input("Enter your email address")
+    if st.button("SEND VERIFICATION CODE"):
+        if "@" in email_in:
+            st.session_state.temp_email = email_in
+            st.session_state.otp = str(random.randint(1000, 9999))
+            if send_otp(email_in, st.session_state.otp):
+                st.session_state.flow = "verify"
+                st.success("Code sent! Check your inbox.")
+                st.rerun()
+            else:
+                st.error("Failed to send email. Check your Brevo API key.")
+        else:
+            st.error("Please enter a valid email.")
 
+# PAGE: VERIFY OTP
 elif st.session_state.flow == "verify":
-    code = st.text_input("Enter Code")
+    st.subheader("Verify your email")
+    code_in = st.text_input("Enter 4-digit code")
     if st.button("VERIFY"):
-        if code == st.session_state.otp: st.session_state.flow = "pass"; st.rerun()
-        else: st.error("Wrong code")
-
-elif st.session_state.flow == "pass":
-    p1 = st.text_input("New Password", type="password")
-    if st.button("SAVE & FINISH"):
-        # GET CURRENT USERS
-        df = get_users()
-        # ADD NEW USER
-        new_user = pd.DataFrame([{"email": st.session_state.temp_email, "password": p1}])
-        updated_df = pd.concat([df, new_user], ignore_index=True)
-        
-        # THE FIX: This is a more stable way to update
-        try:
-            conn.update(worksheet="Sheet1", data=updated_df)
-            st.success("Account Secured!")
-            st.session_state.flow = "dashboard"
+        if code_in == st.session_state.otp:
+            st.session_state.flow = "set_pass"
             st.rerun()
-        except Exception as e:
-            st.error(f"Almost there! Just hit 'SAVE & FINISH' one more time. (Error: {e})")
+        else:
+            st.error("Invalid code. Please try again.")
 
+# PAGE: SET PASSWORD & SAVE TO SUPABASE
+elif st.session_state.flow == "set_pass":
+    st.subheader("Secure your account")
+    p1 = st.text_input("Create a password", type="password")
+    if st.button("COMPLETE SIGNUP"):
+        if len(p1) > 5:
+            # This part sends the data to your Supabase table
+            user_data = {"email": st.session_state.temp_email, "password": p1}
+            try:
+                supabase.table("users").insert(user_data).execute()
+                st.success("Account created successfully!")
+                st.session_state.flow = "dashboard"
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error saving to database: {e}")
+        else:
+            st.error("Password must be at least 6 characters.")
+
+# PAGE: LOGIN
 elif st.session_state.flow == "login":
+    st.subheader("Welcome back")
     l_email = st.text_input("Email")
     l_pass = st.text_input("Password", type="password")
-    if st.button("ENTER"):
-        df = get_users()
-        if not df.empty and l_email in df['email'].values:
-            # Match the password
-            stored_pass = str(df[df['email'] == l_email]['password'].values[0])
-            if str(l_pass) == stored_pass:
-                st.session_state.temp_email = l_email
-                st.session_state.flow = "dashboard"; st.rerun()
-            else: st.error("Wrong Password")
-        else: st.error("Account not found")
+    if st.button("LOG IN"):
+        # This checks the Supabase table for the user
+        res = supabase.table("users").select("*").eq("email", l_email).execute()
+        if res.data and res.data[0]['password'] == l_pass:
+            st.session_state.temp_email = l_email
+            st.session_state.flow = "dashboard"
+            st.rerun()
+        else:
+            st.error("Invalid email or password.")
 
+# PAGE: DASHBOARD
 elif st.session_state.flow == "dashboard":
-    st.success(f"Welcome {st.session_state.temp_email}!")
-    if st.button("LOGOUT"): st.session_state.flow = "landing"; st.rerun()
+    st.title(f"🚀 Hello, {st.session_state.temp_email}")
+    st.write("Welcome to your SubSentry dashboard.")
+    st.info("Currently tracking: 0 Subscriptions")
+    if st.button("LOG OUT"):
+        st.session_state.flow = "landing"
+        st.rerun()
