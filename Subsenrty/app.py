@@ -117,10 +117,37 @@ elif st.session_state.flow == "login":
         else:
             st.error("Invalid credentials.")
 
-# PAGE: DASHBOARD (THE NEW PART)
+# PAGE: DASHBOARD (WITH UPDATED REMINDER ENGINE)
 elif st.session_state.flow == "dashboard":
     st.title("🚀 Your Subscriptions")
-    st.write(f"Logged in: *{st.session_state.temp_email}*")
+    user_email = st.session_state.temp_email
+    st.write(f"Logged in: *{user_email}*")
+
+    # --- THE REMINDER ENGINE ---
+    # This runs every time you log in or refresh the dashboard
+    today = datetime.now().date()
+    current_hour = datetime.now().hour
+
+    # Scan the entire database for subscriptions due in 2 days
+    all_res = supabase.table("subscriptions").select("*").execute()
+    if all_res.data:
+        for s in all_res.data:
+            renewal = datetime.strptime(s['renewal_date'], '%Y-%m-%d').date()
+            days_left = (renewal - today).days
+            
+            # TRIGGER: Exactly 2 days left AND between 8:00 AM - 12:00 PM
+            if 8 <= current_hour <= 12:
+                if days_left == 2:
+                    # Prevent sending multiple emails in the same session
+                    sent_key = f"sent_{s['id']}_{today}"
+                    if sent_key not in st.session_state:
+                        target = s.get('user_email', user_email)
+                        subj = f"⚠️ SubSentry Alert: {s['service_name']} RENEWAL"
+                        msg = f"<h3>Alert!</h3><p>Your {s['service_name']} sub of ₦{s['price']} renews on {s['renewal_date']} (2 days left).</p>"
+                        
+                        send_email(target, subj, msg)
+                        st.session_state[sent_key] = True
+                        st.success(f"Reminder sent for {s['service_name']}!")
 
     # ADD NEW SUB
     with st.expander("➕ Add New Subscription"):
@@ -129,7 +156,7 @@ elif st.session_state.flow == "dashboard":
         date = st.date_input("Next Renewal Date")
         if st.button("SAVE"):
             sub_data = {
-                "user_email": st.session_state.temp_email,
+                "user_email": user_email,
                 "service_name": name,
                 "price": amt,
                 "renewal_date": str(date)
@@ -139,12 +166,11 @@ elif st.session_state.flow == "dashboard":
             st.rerun()
 
     # DISPLAY SUBS
-    res = supabase.table("subscriptions").select("*").eq("user_email", st.session_state.temp_email).execute()
+    res = supabase.table("subscriptions").select("*").eq("user_email", user_email).execute()
     if res.data:
         for s in res.data:
-            # Check for 2-day warning
             renewal = datetime.strptime(s['renewal_date'], '%Y-%m-%d').date()
-            days_left = (renewal - datetime.now().date()).days
+            days_left = (renewal - today).days
             
             warning_style = "color: red; font-weight: bold;" if days_left <= 2 else "color: green;"
             status = "⚠️ DUE SOON" if days_left <= 2 else f"{days_left} days left"
