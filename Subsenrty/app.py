@@ -58,21 +58,28 @@ elif st.session_state.flow == "signup":
 
 # --- PAGE: LOGIN ---
 elif st.session_state.flow == "login":
+# --- PAGE: LOGIN (FIXED VERSION) ---
+elif st.session_state.flow == "login":
     st.title("Welcome Back")
     l_email = st.text_input("Email")
     l_pass = st.text_input("Password", type="password")
+    
     if st.button("LOG IN"):
+        # We use a simple try/except but print the actual error to the screen
         try:
-            # FIXED LOGIN LOGIC
-            response = supabase.auth.sign_in_with_password({"email": l_email, "password": l_pass})
-            st.session_state.user_id = response.user.id
-            st.session_state.temp_email = l_email
-            st.session_state.flow = "dashboard"
-            st.rerun()
-        except Exception:
-            st.error("Invalid credentials. If you just signed up, make sure to confirm your email in Supabase.")
-
-# --- PAGE: DASHBOARD (REMINDER ENGINE INCLUDED) ---
+            auth_response = supabase.auth.sign_in_with_password({
+                "email": l_email.strip(), 
+                "password": l_pass
+            })
+            
+            if auth_response.user:
+                st.session_state.user_id = auth_response.user.id
+                st.session_state.temp_email = l_email
+                st.session_state.flow = "dashboard"
+                st.rerun()
+        except Exception as e:
+            # This will show you the REAL error (e.g., Email not confirmed)
+            st.error(f"Login failed: {str(e)}")
 elif st.session_state.flow == "dashboard":
     st.title("🚀 Your Subscriptions")
     user_email = st.session_state.temp_email
