@@ -33,7 +33,6 @@ if "flow" not in st.session_state:
 # --- PAGE: LANDING ---
 if st.session_state.flow == "landing":
     st.title("🔔 SUBSENTRY ALERT")
-    st.write("Manage your subscriptions and get alerted before you get debited.")
     if st.button("CREATE ACCOUNT"):
         st.session_state.flow = "signup"
         st.rerun()
@@ -47,34 +46,30 @@ elif st.session_state.flow == "signup":
     s_email = st.text_input("Email")
     s_pass = st.text_input("Password", type="password")
     if st.button("REGISTER"):
-        try:
-            supabase.auth.sign_up({"email": s_email, "password": s_pass})
-            st.success("Registration successful! Check your email to verify.")
-        except Exception as e:
-            st.error(f"Error: {e}")
+        supabase.auth.sign_up({"email": s_email, "password": s_pass})
+        st.success("Registration successful! Verify your email.")
     if st.button("Back to Login"):
         st.session_state.flow = "login"
         st.rerun()
 
-# --- PAGE: LOGIN ---
+# --- PAGE: LOGIN (FIXED TO ORIGINAL) ---
 elif st.session_state.flow == "login":
     st.title("Welcome Back")
     l_email = st.text_input("Email")
     l_pass = st.text_input("Password", type="password")
     
     if st.button("LOG IN"):
-        try:
-            # This is the exact login logic from yesterday
-            res = supabase.auth.sign_in_with_password({"email": l_email, "password": l_pass})
-            if res.user:
-                st.session_state.user_id = res.user.id
-                st.session_state.temp_email = l_email
-                st.session_state.flow = "dashboard"
-                st.rerun()
-        except Exception as e:
-            st.error(f"Login failed: {str(e)}")
+        # This is the exact method from yesterday
+        res = supabase.auth.sign_in_with_password({"email": l_email.strip(), "password": l_pass})
+        if res.user:
+            st.session_state.user_id = res.user.id
+            st.session_state.temp_email = l_email
+            st.session_state.flow = "dashboard"
+            st.rerun()
+        else:
+            st.error("Invalid login credentials")
 
-# --- PAGE: DASHBOARD (Yesterday's UI + Today's Time Window) ---
+# --- PAGE: DASHBOARD (UI FROM YESTERDAY + TODAY'S UPDATE) ---
 elif st.session_state.flow == "dashboard":
     st.title("🚀 Your Subscriptions")
     user_email = st.session_state.temp_email
@@ -84,7 +79,7 @@ elif st.session_state.flow == "dashboard":
     current_hour = datetime.datetime.now().hour
 
     # --- THE REMINDER ENGINE ---
-    # This checks EVERY sub in the database
+    # Runs automatically between 8 AM and 12 PM
     res = supabase.table("subscriptions").select("*").execute()
     
     if res.data:
@@ -92,12 +87,10 @@ elif st.session_state.flow == "dashboard":
             sub_date = datetime.datetime.strptime(sub['next_renewal_date'], '%Y-%m-%d').date()
             days_left = (sub_date - today).days
             
-            # TODAY'S UPDATE: Only fire if time is between 8 AM and 12 PM
             if 8 <= current_hour <= 12:
                 if days_left == 2:
                     sent_key = f"sent_{sub['id']}_{today}"
                     if sent_key not in st.session_state:
-                        # Send to the owner of the subscription
                         target = sub.get('user_email', user_email)
                         msg = f"Hi! Your {sub['service_name']} sub of ₦{sub['price']} renews on {sub['next_renewal_date']}."
                         subj = f"⚠️ SubSentry Alert: {sub['service_name']} renews in 2 days!"
@@ -106,7 +99,7 @@ elif st.session_state.flow == "dashboard":
                         st.session_state[sent_key] = True
                         st.success(f"Reminder sent for {sub['service_name']}!")
 
-    # Display List (Yesterday's UI)
+    # Display List
     st.subheader("Active Subscriptions")
     user_subs = supabase.table("subscriptions").select("*").eq("user_id", st.session_state.user_id).execute()
     
@@ -120,7 +113,7 @@ elif st.session_state.flow == "dashboard":
                     st.warning("⚠️ DUE SOON")
                 st.divider()
 
-    # Add New Sub (Yesterday's UI)
+    # Add New Sub
     with st.expander("➕ Add New Subscription"):
         name = st.text_input("Service Name")
         amt = st.number_input("Price (₦)", min_value=0.0)
