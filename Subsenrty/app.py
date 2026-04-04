@@ -4,7 +4,6 @@ import datetime
 import requests
 
 # --- CONFIG & DATABASE ---
-# Ensure these secrets are set in your Streamlit Cloud dashboard
 url = st.secrets["SUPABASE_URL"]
 key = st.secrets["SUPABASE_KEY"]
 supabase: Client = create_client(url, key)
@@ -49,8 +48,8 @@ elif st.session_state.flow == "signup":
     s_pass = st.text_input("Password", type="password")
     if st.button("REGISTER"):
         try:
-            res = supabase.auth.sign_up({"email": s_email, "password": s_pass})
-            st.success("Registration successful! Check your email for a link.")
+            supabase.auth.sign_up({"email": s_email, "password": s_pass})
+            st.success("Registration successful! Please check your email to verify, then log in.")
         except Exception as e:
             st.error(f"Error: {e}")
     if st.button("Back to Login"):
@@ -64,13 +63,14 @@ elif st.session_state.flow == "login":
     l_pass = st.text_input("Password", type="password")
     if st.button("LOG IN"):
         try:
-            res = supabase.auth.sign_in_with_password({"email": l_email, "password": l_pass})
-            st.session_state.user_id = res.user.id
+            # FIXED LOGIN LOGIC
+            response = supabase.auth.sign_in_with_password({"email": l_email, "password": l_pass})
+            st.session_state.user_id = response.user.id
             st.session_state.temp_email = l_email
             st.session_state.flow = "dashboard"
             st.rerun()
-        except:
-            st.error("Invalid credentials. Please try again.")
+        except Exception:
+            st.error("Invalid credentials. If you just signed up, make sure to confirm your email in Supabase.")
 
 # --- PAGE: DASHBOARD (REMINDER ENGINE INCLUDED) ---
 elif st.session_state.flow == "dashboard":
@@ -82,36 +82,32 @@ elif st.session_state.flow == "dashboard":
     current_hour = datetime.datetime.now().hour
 
     # --- THE REMINDER ENGINE ---
-    # This scans the whole table to see who needs a message today
+    # Scans for ANY subscription in the DB due in 2 days
     res = supabase.table("subscriptions").select("*").execute()
     
     if res.data:
         for sub in res.data:
-            # Date Math
             sub_date = datetime.datetime.strptime(sub['next_renewal_date'], '%Y-%m-%d').date()
             days_left = (sub_date - today).days
             
-            # TRIGGER: Between 8 AM and 12 PM AND exactly 2 days left
+            # TRIGGER: 8 AM to 12 PM window & 2 days remaining
             if 8 <= current_hour <= 12:
                 if days_left == 2:
-                    # Session-based safety to prevent duplicate emails on page refresh
                     sent_key = f"sent_{sub['id']}_{today}"
                     if sent_key not in st.session_state:
-                        # Find the owner's email (In this case, we send to the registered user)
-                        # For testing, it sends to the person currently logged in or the sub owner
-                        target_email = sub.get('user_email', user_email) 
+                        # Send to the stored email of the subscription owner
+                        target_email = sub.get('user_email', user_email)
                         
-                        msg = f"Hi there! Your {sub['service_name']} subscription of ₦{sub['price']} will renew on {sub['next_renewal_date']}."
+                        msg = f"Hi! Your {sub['service_name']} sub of ₦{sub['price']} renews on {sub['next_renewal_date']}."
                         subj = f"⚠️ SubSentry Alert: {sub['service_name']} renews in 2 days!"
                         
                         status = send_email(target_email, subj, msg)
-                        if status == 201 or status == 200:
+                        if status in [200, 201]:
                             st.session_state[sent_key] = True
-                            st.success(f"Reminder sent for {sub['service_name']} to {target_email}!")
+                            st.success(f"Reminder fired for {sub['service_name']} to {target_email}!")
 
     # --- DISPLAY SUBSCRIPTIONS ---
     st.subheader("Active Subscriptions")
-    # Fetch specifically for THIS logged-in user to show on screen
     user_subs = supabase.table("subscriptions").select("*").eq("user_id", st.session_state.user_id).execute()
     
     if user_subs.data:
@@ -119,30 +115,28 @@ elif st.session_state.flow == "dashboard":
             with st.container():
                 st.write(f"*{sub['service_name']}*")
                 st.write(f"Price: ₦{sub['price']} | Date: {sub['next_renewal_date']}")
-                
                 sub_date = datetime.datetime.strptime(sub['next_renewal_date'], '%Y-%m-%d').date()
                 if (sub_date - today).days <= 2:
                     st.warning("⚠️ DUE SOON")
                 st.divider()
     else:
-        st.info("No subscriptions found. Add one below!")
+        st.info("Your list is empty. Add a subscription below!")
 
     # --- ADD NEW SUBSCRIPTION ---
     with st.expander("➕ Add New Subscription"):
-        name = st.text_input("Service Name (e.g. MTN, Spotify)")
+        name = st.text_input("Service Name")
         amt = st.number_input("Price (₦)", min_value=0.0)
         ren_date = st.date_input("Next Renewal Date")
-        
         if st.button("SAVE"):
             new_sub = {
                 "user_id": st.session_state.user_id,
                 "service_name": name,
                 "price": amt,
                 "next_renewal_date": str(ren_date),
-                "user_email": user_email # Storing email to make sure engine knows where to send
+                "user_email": user_email
             }
             supabase.table("subscriptions").insert(new_sub).execute()
-            st.success("Subscription saved successfully!")
+            st.success("Saved!")
             st.rerun()
 
     if st.button("LOG OUT"):
